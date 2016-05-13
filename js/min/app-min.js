@@ -1,0 +1,1 @@
+$(document).foundation(),$(".owl-carousel").owlCarousel({items:1,loop:!0,autoplay:!0}),jQuery.scrollSpeed(100,500);
