@@ -97,7 +97,7 @@ var Core = function ($element, options, id) {
     self.initialize();
 };
 $.extend(Core, {
-    VERSION: '1.8.0 Argon',
+    VERSION: '2.0.4 June',
     TPL_OPTIONS_ALIASES: {
         tplError: 'error',
         tplGalleryArrows: 'gallery.arrows',
@@ -121,7 +121,12 @@ $.extend(Core.prototype, {
     initialize: function () {
         var self = this;
         self.instapi = new Instapi(self, self.options, self.id);
-        var source = u.unifyMultipleOption(self.options.source);
+        var source;
+        if (self.instapi.isSandbox()) {
+            source = ['@self'];
+        } else {
+            source = u.unifyMultipleOption(self.options.source);
+        }
         if (!source || !source.length) {
             self.showError('Please set option "source". See details in docs.');
             return;
@@ -158,7 +163,6 @@ $.extend(Core.prototype, {
         var self = this;
         if (!self.options.debug) {
             $('#instaShowGallery_' + self.id).css('display', 'none');
-            return;
         }
         var $message = $(views.error({ message: message }));
         if (self.gallery) {
@@ -173,6 +177,7 @@ module.exports = Core;
 },{"./defaults":4,"./gallery":6,"./instapi":8,"./jquery":20,"./lang":21,"./popup":24,"./u":27,"./views":28}],4:[function(require,module,exports){
 "use strict";
 module.exports = {
+    api: null,
     clientId: null,
     accessToken: null,
     debug: false,
@@ -643,8 +648,10 @@ $.extend(Gallery.prototype, {
         if (!self.core.mediaFetcher.hasNext()) {
             q.reject();
         } else {
+            self.puzzle();
             self.loader.show(400);
             self.core.mediaFetcher.fetch(self.grid.countCells()).done(function (list) {
+                self.free();
                 self.loader.hide();
                 if (!list || !list.length) {
                     q.reject();
@@ -796,14 +803,18 @@ $.extend(Gallery.prototype, {
         var self = this;
         var q = $.Deferred();
         var nextId = self.activeViewId + 1;
-        if (!self.hasView(nextId) && self.hasNextView(nextId)) {
-            self.addView().done(function () {
-                self.moveToView(nextId, q);
-            }).fail(function () {
-                q.reject();
-            });
+        if (self.isBusy()) {
+            q.reject();
         } else {
-            self.moveToView(nextId, q);
+            if (!self.hasView(nextId) && self.hasNextView(nextId)) {
+                self.addView().done(function () {
+                    self.moveToView(nextId, q);
+                }).fail(function () {
+                    q.reject();
+                });
+            } else {
+                self.moveToView(nextId, q);
+            }
         }
         return q.promise();
     },
@@ -1179,6 +1190,10 @@ $.extend(Instapi.prototype, {
         self.cacheProvider = new CacheProvider(self.id);
         self.client = new Client(self, self.options, self.cacheProvider);
     },
+    isSandbox: function () {
+        var self = this;
+        return !self.client.isAlternativeApi() && self.options.accessToken && !self.options.source;
+    },
     createMediaFetcher: function (source, filter, postFilter) {
         var self = this;
         if ($.type(source) !== 'array' || !source.length) {
@@ -1290,6 +1305,8 @@ var Client = function (instapi, options, cacheProvider) {
     self.authorized = false;
     self.clientId = options.clientId;
     self.accessToken = options.accessToken;
+    self.displayErrors = true;
+    self.lastErrorMessage = null;
     self.initialize();
 };
 $.extend(Client, { API_URI: 'https://api.instagram.com/v1' });
@@ -1303,6 +1320,17 @@ $.extend(Client.prototype, {
         } else if (!self.clientId) {
         }
     },
+    getApiUrl: function () {
+        var self = this;
+        if (self.options.api) {
+            return self.options.api.replace(/\/+$/, '') + '/';
+        }
+        return Client.API_URI;
+    },
+    isAlternativeApi: function () {
+        var self = this;
+        return self.getApiUrl() != Client.API_URI;
+    },
     send: function (path, params, options, expired) {
         var self = this;
         params = params || {};
@@ -1311,16 +1339,25 @@ $.extend(Client.prototype, {
         var q = $.Deferred();
         var pathParams = u.parseQuery(path);
         params = $.extend(false, {}, pathParams, params);
-        path = path.replace(Client.API_URI, '').replace(/(\?\|#).*/, '');
-        if (self.authorized) {
-            params.access_token = self.accessToken;
-        } else {
-            params.client_id = self.clientId;
+        path = path.replace(self.getApiUrl(), '').replace(/\?.+$/, '');
+        if (!self.isAlternativeApi()) {
+            if (self.accessToken) {
+                params.access_token = self.accessToken;
+            }
+            if (self.clientId) {
+                params.client_id = self.clientId;
+            }
         }
         if (params.callback) {
             params.callback = null;
         }
-        var url = Client.API_URI + path + '?' + $.param(params);
+        var url;
+        if (self.isAlternativeApi()) {
+            params.path = '/v1' + path.replace('/v1', '');
+            url = self.getApiUrl() + '?' + $.param(params);
+        } else {
+            url = self.getApiUrl() + path + '?' + $.param(params);
+        }
         options = $.extend(false, {}, options, {
             url: url,
             dataType: 'jsonp',
@@ -1331,7 +1368,11 @@ $.extend(Client.prototype, {
         } else {
             $.ajax(options).done(function (res) {
                 if (res.meta.code !== 200) {
-                    self.instapi.core.showError(res.meta.error_message);
+                    self.lastErrorMessage = res.meta.error_message;
+                    if (self.displayErrors) {
+                        self.instapi.core.showError(res.meta.error_message);
+                    }
+                    q.reject();
                 } else {
                     self.cacheProvider.set(url, expired, res);
                     q.resolve(res);
@@ -1344,6 +1385,10 @@ $.extend(Client.prototype, {
         var self = this;
         options = $.extend(false, options, { type: 'get' });
         return self.send(path, params, options, expired);
+    },
+    setDisplayErrors: function (v) {
+        var self = this;
+        self.displayErrors = !!v;
     }
 });
 module.exports = Client;
@@ -1359,16 +1404,15 @@ ComplexMediaFetcher.prototype = function () {
 $.extend(ComplexMediaFetcher.prototype, {
     fetch: function (count, q) {
         var self = this;
-        var data;
-        var promises = [];
         q = q || $.Deferred();
-        $.each(self.fetchers, function (i, fetcher) {
-            promises.push(fetcher.fetch(count));
-        });
-        $.when.apply($, promises).done(function () {
+        var data;
+        var finished = 0;
+        var results = [];
+        var fetchersCount = self.fetchers.length;
+        var done = function () {
             var dirtyData = [];
             var filteredData = [];
-            $.each(arguments, function (i, resourceData) {
+            $.each(results, function (i, resourceData) {
                 Array.prototype.push.apply(dirtyData, resourceData);
             });
             $.each(dirtyData, function (i, item) {
@@ -1387,6 +1431,29 @@ $.extend(ComplexMediaFetcher.prototype, {
                 media.fetcher.refund(media);
             });
             q.resolve(data);
+        };
+        var client = self.fetchers[0].client;
+        client.setDisplayErrors(false);
+        $.each(self.fetchers, function (i, fetcher) {
+            fetcher.fetch(count).always(function (result) {
+                if (this.state() === 'resolved') {
+                    results.push(result);
+                } else if (fetchersCount < 2) {
+                    return;
+                } else {
+                    self.fetchers = self.fetchers.filter(function (f, j) {
+                        return i !== j;
+                    });
+                }
+                if (++finished == fetchersCount) {
+                    client.setDisplayErrors(true);
+                    if (self.fetchers.length) {
+                        done();
+                    } else {
+                        client.instapi.core.showError(client.lastErrorMessage);
+                    }
+                }
+            });
         });
         return q.promise();
     },
@@ -1435,8 +1502,12 @@ $.extend(MediaFetcher.prototype, {
                 }
                 Array.prototype.push.apply(self.stack, data);
                 self.fetch(count, q);
-            }).fail(function () {
-                self.fetch(count, q);
+            }).fail(function (status) {
+                if (status === -1) {
+                    q.reject();
+                } else {
+                    self.fetch(count, q);
+                }
             });
         }
         return q.promise();
@@ -1460,6 +1531,8 @@ $.extend(MediaFetcher.prototype, {
                 }
                 result.data = self.filterData(result.data);
                 q.resolve(result);
+            }).fail(function () {
+                q.reject(-1);
             });
         }
         return q.promise();
@@ -1482,6 +1555,9 @@ $.extend(MediaFetcher.prototype, {
             $.each(self.filters, function (i, f) {
                 if (!flag) {
                     return;
+                }
+                if (!item.tags) {
+                    item.tags = [];
                 }
                 switch (f.logic) {
                 case 'only':
@@ -1535,6 +1611,14 @@ $.extend(Media, Model, {
     findById: function (client, id, q) {
         q = q || $.Deferred();
         client.get('/media/' + id).done(function (result) {
+            var media = Media.create(client, result.data);
+            q.resolve(media);
+        });
+        return q.promise();
+    },
+    findByCode: function (client, code, q) {
+        q = q || $.Deferred();
+        client.get('/media/shortcode/' + code + '/').done(function (result) {
             var media = Media.create(client, result.data);
             q.resolve(media);
         });
@@ -1610,9 +1694,9 @@ $.extend(SpecificMediaFetcher.prototype, MediaFetcher.prototype, {
     initialize: function () {
         var self = this;
         if (self.idType === 'specific_media_shortcode') {
-            self.basePath = '/media/shortcode/' + self.sourceName;
+            self.basePath = '/media/shortcode/' + self.sourceName + '/';
         } else if (self.idType === 'specific_media_id') {
-            self.basePath = '/media/' + self.sourceName;
+            self.basePath = '/media/' + self.sourceName + '/';
         }
     }
 });
@@ -1630,7 +1714,7 @@ TagMediaFetcher.prototype = function () {
 $.extend(TagMediaFetcher.prototype, MediaFetcher.prototype, {
     initialize: function () {
         var self = this;
-        self.basePath = '/tags/' + self.sourceName + '/media/recent';
+        self.basePath = '/tags/' + self.sourceName + '/media/recent/';
     }
 });
 module.exports = TagMediaFetcher;
@@ -1655,7 +1739,7 @@ $.extend(UserMediaFetcher.prototype, MediaFetcher.prototype, {
         if (!self.userId) {
             User.findId(self.client, self.sourceName).done(function (id) {
                 self.userId = id;
-                self.basePath = '/users/' + id + '/media/recent';
+                self.basePath = '/users/' + id + '/media/recent/';
                 findIdPromise.resolve();
             }).fail(function () {
                 self.client.instapi.core.showError('Sorry, user <strong>@' + self.sourceName + '</strong> can`t be found.');
@@ -1681,22 +1765,26 @@ $.extend(User, Model, {
     constructor: User,
     findId: function (client, name) {
         var q = $.Deferred();
-        client.get('/users/search/', { q: name }, null, 604800).done(function (result) {
-            var id;
-            $.each(result.data, function (i, item) {
+        if (client.isAlternativeApi() || client.instapi.isSandbox()) {
+            q.resolve(name);
+        } else {
+            client.get('/users/search/', { q: name }, null, 604800).done(function (result) {
+                var id;
+                $.each(result.data, function (i, item) {
+                    if (id) {
+                        return;
+                    }
+                    if (item.username === name) {
+                        id = item.id;
+                    }
+                });
                 if (id) {
-                    return;
-                }
-                if (item.username === name) {
-                    id = item.id;
+                    q.resolve(id);
+                } else {
+                    q.reject();
                 }
             });
-            if (id) {
-                q.resolve(id);
-            } else {
-                q.reject();
-            }
-        });
+        }
         return q.promise();
     }
 });
@@ -2017,7 +2105,7 @@ module.exports = function (gallery) {
 };
 },{"./jquery":20}],24:[function(require,module,exports){
 "use strict";
-var $ = require('./jquery'), views = require('./views'), u = require('./u'), Instapi = require('./instapi'), Media = require('./instapi/media');
+var $ = require('./jquery'), views = require('./views'), u = require('./u'), Instapi = require('./instapi'), Media = require('./instapi/media'), SpecificMediaFetcher = require('./instapi/specific-media-fetcher');
 var $w = $(window);
 var Popup = function (core) {
     var self = this;
@@ -2093,7 +2181,7 @@ $.extend(Popup.prototype, {
         self.showMedia(media);
         self.showing = true;
         if (self.core.options.popupDeepLinking) {
-            window.location.hash = '#!is' + self.core.id + '/$' + media.id;
+            window.location.hash = '#!is' + self.core.id + '/$' + media.code;
         }
         setTimeout(function () {
             self.$root.addClass('instashow-show');
@@ -2119,21 +2207,24 @@ $.extend(Popup.prototype, {
         if (self.core.options.popupHrImages) {
             media.images.standard_resolution.url = media.images.standard_resolution.url.replace('s640x640', 's1080x1080');
         }
+        var commentsCount = media.getCommentsCount();
         var tplData = {
                 media: media,
                 options: {},
                 info: {
                     viewOnInstagram: self.core.lang.t('View in Instagram'),
                     likesCount: media.getLikesCount(),
-                    commentsCount: media.getCommentsCount(),
+                    commentsCount: commentsCount,
                     description: media.caption ? u.nl2br(Instapi.parseAnchors(media.caption.text)) : null,
                     location: media.location ? media.location.name : null,
-                    passedTime: u.pretifyDate(media.created_time, self.core.lang),
-                    comments: $.extend(true, [], media.comments.data)
+                    passedTime: u.pretifyDate(media.created_time, self.core.lang)
                 }
             };
         if (self.optionInfo) {
             $.each(self.optionInfo, function (i, item) {
+                if (self.core.instapi.isSandbox() && item === 'comments') {
+                    return;
+                }
                 tplData.options[item] = true;
             });
         }
@@ -2146,10 +2237,14 @@ $.extend(Popup.prototype, {
         tplData.options.hasMeta = tplData.options.hasProperties || tplData.options.passedTime;
         tplData.options.hasContent = tplData.options.hasDescription || tplData.options.hasComments;
         tplData.options.hasInfo = tplData.options.hasOrigin || tplData.options.hasMeta || tplData.options.hasContent;
-        tplData.info.comments.map(function (item) {
+        var commentsList = $.extend(true, [], media.comments.data || []);
+        commentsList.map(function (item) {
             item.text = u.nl2br(Instapi.parseAnchors(item.text));
             return item;
         });
+        if (commentsList) {
+            tplData.info.comments = views.popup.mediaComments({ list: commentsList });
+        }
         var $media = $(views.popup.media(tplData));
         if (tplData.options.isVideo) {
             self.video = $media.find('video').get(0);
@@ -2172,6 +2267,26 @@ $.extend(Popup.prototype, {
             $media.css('transition-duration', '');
             self.adjust();
         };
+        var $content, specificMediaFetcher;
+        if (self.core.instapi.client.isAlternativeApi() && !commentsList.length && commentsCount) {
+            $content = $media.find('.instashow-popup-media-info-content');
+            if (!$content.length) {
+                $content = $('<div class="instashow-popup-media-info-content"></div>');
+                $content.appendTo($media.find('.instashow-popup-media-info'));
+            }
+            specificMediaFetcher = new SpecificMediaFetcher(self.core.instapi.client, 'specific_media_shortcode', media.code, []);
+            specificMediaFetcher.fetch().done(function (result) {
+                var extMedia = result[0];
+                media.comments.data = extMedia.comments.data;
+                var commentsList = $.extend(true, [], media.comments.data || []);
+                commentsList.map(function (item) {
+                    item.text = u.nl2br(Instapi.parseAnchors(item.text));
+                    return item;
+                });
+                var $comments = $(views.popup.mediaComments({ list: commentsList }));
+                $content.append($comments);
+            });
+        }
         return $media;
     },
     showMedia: function (media) {
@@ -2199,7 +2314,7 @@ $.extend(Popup.prototype, {
         } else {
             self.busy = true;
             if (self.core.options.popupDeepLinking) {
-                window.location.hash = '#!is' + self.core.id + '/$' + targetMedia.id;
+                window.location.hash = '#!is' + self.core.id + '/$' + targetMedia.code;
             }
             $target = self.createMedia(targetMedia);
             $both = $().add($current).add($target);
@@ -2245,8 +2360,8 @@ $.extend(Popup.prototype, {
         if (self.isBusy() || !hashMatches || !hashMatches[1]) {
             return;
         }
-        var id = hashMatches[1];
-        Media.findById(self.core.instapi.client, id).done(function (media) {
+        var code = hashMatches[1];
+        Media.findByCode(self.core.instapi.client, code).done(function (media) {
             self.open(media);
         });
     },
@@ -2419,7 +2534,7 @@ $.extend(Popup.prototype, {
     }
 });
 module.exports = Popup;
-},{"./instapi":8,"./instapi/media":13,"./jquery":20,"./u":27,"./views":28}],25:[function(require,module,exports){
+},{"./instapi":8,"./instapi/media":13,"./instapi/specific-media-fetcher":15,"./jquery":20,"./u":27,"./views":28}],25:[function(require,module,exports){
 "use strict";
 var $ = require('./jquery'), views = require('./views');
 var Scrollbar = function (gallery) {
@@ -3019,21 +3134,7 @@ views['popup']['media'] = Handlebars.template({
     },
     '28': function (depth0, helpers, partials, data) {
         var stack1;
-        return '<div class="instashow-popup-media-info-comments"> ' + ((stack1 = helpers.each.call(depth0, (stack1 = depth0 != null ? depth0.info : depth0) != null ? stack1.comments : stack1, {
-            'name': 'each',
-            'hash': {},
-            'fn': this.program(29, data, 0),
-            'inverse': this.noop,
-            'data': data
-        })) != null ? stack1 : '') + '</div> ';
-    },
-    '29': function (depth0, helpers, partials, data) {
-        var stack1, helper, alias1 = this.lambda, alias2 = this.escapeExpression;
-        return '<div class="instashow-popup-media-info-comments-item"> <a href="https://instagram.com/' + alias2(alias1((stack1 = depth0 != null ? depth0.from : depth0) != null ? stack1.username : stack1, depth0)) + '" target="blank" rel="nofollow">' + alias2(alias1((stack1 = depth0 != null ? depth0.from : depth0) != null ? stack1.username : stack1, depth0)) + '</a> ' + ((stack1 = (helper = (helper = helpers.text || (depth0 != null ? depth0.text : depth0)) != null ? helper : helpers.helperMissing, typeof helper === 'function' ? helper.call(depth0, {
-            'name': 'text',
-            'hash': {},
-            'data': data
-        }) : helper)) != null ? stack1 : '') + '</div> ';
+        return ' ' + ((stack1 = this.lambda((stack1 = depth0 != null ? depth0.info : depth0) != null ? stack1.comments : stack1, depth0)) != null ? stack1 : '') + ' ';
     },
     'compiler': [
         6,
@@ -3069,6 +3170,31 @@ views['popup']['media'] = Handlebars.template({
             'name': 'if',
             'hash': {},
             'fn': this.program(9, data, 0),
+            'inverse': this.noop,
+            'data': data
+        })) != null ? stack1 : '') + '</div>';
+    },
+    'useData': true
+});
+views['popup']['mediaComments'] = Handlebars.template({
+    '1': function (depth0, helpers, partials, data) {
+        var stack1, helper, alias1 = this.lambda, alias2 = this.escapeExpression;
+        return '<div class="instashow-popup-media-info-comments-item"> <a href="https://instagram.com/' + alias2(alias1((stack1 = depth0 != null ? depth0.from : depth0) != null ? stack1.username : stack1, depth0)) + '" target="blank" rel="nofollow">' + alias2(alias1((stack1 = depth0 != null ? depth0.from : depth0) != null ? stack1.username : stack1, depth0)) + '</a> ' + ((stack1 = (helper = (helper = helpers.text || (depth0 != null ? depth0.text : depth0)) != null ? helper : helpers.helperMissing, typeof helper === 'function' ? helper.call(depth0, {
+            'name': 'text',
+            'hash': {},
+            'data': data
+        }) : helper)) != null ? stack1 : '') + '</div> ';
+    },
+    'compiler': [
+        6,
+        '>= 2.0.0-beta.1'
+    ],
+    'main': function (depth0, helpers, partials, data) {
+        var stack1;
+        return '<div class="instashow-popup-media-info-comments"> ' + ((stack1 = helpers.each.call(depth0, depth0 != null ? depth0.list : depth0, {
+            'name': 'each',
+            'hash': {},
+            'fn': this.program(1, data, 0),
             'inverse': this.noop,
             'data': data
         })) != null ? stack1 : '') + '</div>';

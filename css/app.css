@@ -661,7 +661,7 @@ h1.title, h2.title, h3.title, h4.title, h5.title, h6.title {
 }
 
 #hero .wrapper .image-container #logo {
-  background: transparent url("../images/logo-on-green-01.png") center no-repeat;
+  background: transparent url("../images/logo-on-green-01b.png") center no-repeat;
   background-size: contain;
   width: 100%;
   max-width: 1000px;
@@ -724,7 +724,7 @@ section#experience {
   }
 }
 
-section#experience h3 {
+section#experience .info {
   color: #fefefe;
   position: absolute;
   top: 50%;
@@ -812,6 +812,7 @@ section#social i {
 }
 
 section#gallery {
+  height: 800px;
   background-color: #191919;
 }
 

@@ -206,14 +206,26 @@
     <p class="lead">There are many options for animating modals, check out the Motion UI library to see them all</p>
     <button data-close="" aria-label="Close reveal" type="button" class="close-button"><span aria-hidden="true">&times;</span></button>
   </div>
-  <script src="https://code.jquery.com/jquery-2.2.1.min.js"></script>
+  <script src="https://code.jquery.com/jquery-2.2.2.min.js"></script>
   <script src="js/core/wow.js"></script>
   <script src="js/core/what-input.min.js"></script>
   <script src="js/core/foundation.min.js"></script>
   <script src="js/core/owl-slider-2/owl.carousel.min.js"></script>
-  <script src="js/instashow/jquery.instashow.packaged.js"></script>
   <script type="text/javascript" src="//s3.amazonaws.com/downloads.mailchimp.com/js/mc-validate.js"></script>
-  <script type="text/javascript">(function($) {window.fnames = new Array(); window.ftypes = new Array();fnames[0]='EMAIL';ftypes[0]='email';fnames[1]='FNAME';ftypes[1]='text';fnames[2]='LNAME';ftypes[2]='text';}(jQuery));var $mcj = jQuery.noConflict(true);</script>
+  <script src="js/instashow/jquery.instashow.packaged.js"></script>
+  <script>
+    $('.my-instashow').instaShow({
+    accessToken: '3219684885.1677ed0.e39fea1ae5f9462d87c8dc714fe07893',
+    source: '',
+    width: 'auto',
+    height: '500px',
+    columns: 5,
+    rows: 2,
+    direction: 'horizontal',
+    lang: 'en',
+    popupInfo: ''
+    });
+  </script>
   <script src="js/app.js"></script>
   <script>new WOW().init();</script>
 </body>
